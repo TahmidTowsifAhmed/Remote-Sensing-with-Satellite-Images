@@ -1,0 +1,268 @@
+// Import landsat imagery. Create function to cloud mask from 
+// the pixel_qa band of Landsat 8 SR data. 
+// Bits 3 and 4 are cloud shadow and cloud, respectively.
+var image = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  .filterBounds(AOI_G);
+  
+print ("Germany", image);
+  
+function maskL8sr(image) {
+  var cloudShadowBitMask = 1 << 3;
+  var cloudsBitMask = 1 << 4;
+
+  var qa = image.select('QA_PIXEL');
+
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+      .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000)
+      .select("SR_B[0-9]*")
+      .copyProperties(image, ["system:time_start"]);
+}
+
+// Make a list of years, then for each year filter the collection, 
+// mask clouds, and reduce by median. Important to add system:time_start 
+// after reducing as this allows you to filter by date later
+var stepList = ee.List.sequence(2014,2020);
+
+var filterCollection = stepList.map(function(year){
+  var startDate = ee.Date.fromYMD(year,5,1);
+  var endDate = ee.Date.fromYMD(year,9,15);
+  var composite_i = image.filterDate(startDate, endDate)
+                        .map(maskL8sr)
+                        .median()
+                        .set('system:time_start',startDate);
+  return composite_i;
+});
+
+var yearlyComposites = ee.ImageCollection(filterCollection);
+print(yearlyComposites, 'Masked and Filtered Composites');
+
+// Add Normalised Difference Water Index to a function and apply it.
+function ndwi(img){
+  var ndwiImg = img.select(['SR_B3','SR_B5'],['green','nir']);
+  ndwiImg = ndwiImg.expression(
+    '((GREEN - NIR) / (GREEN + NIR))', {
+      'GREEN': ndwiImg.select('green'),
+      'NIR': ndwiImg.select('nir')
+    }).rename('NDWI');
+  return img.addBands(ndwiImg);
+}
+
+yearlyComposites = yearlyComposites.map(function(image){
+  return ndwi(image);
+});
+
+print(yearlyComposites, 'With NDWI as Band');
+
+// Create image collection of yearly composites, selecting the NDWI band.
+var ndwiCollection = yearlyComposites.select('NDWI');
+
+// Create variables for each yearly composite.
+// Add the 7 NDWI maps for each year 2014-2020.
+var y2014 = ndwiCollection.filterDate('2014-01-01','2014-12-31')
+  .first()
+  .clip(AOI_G);
+  
+var y2015 = ndwiCollection.filterDate('2015-01-01','2015-12-31')
+  .first()
+  .clip(AOI_G);
+  
+var y2016 = ndwiCollection.filterDate('2016-01-01','2016-12-31')
+  .first()
+  .clip(AOI_G);
+  
+var y2017 = ndwiCollection.filterDate('2017-01-01','2017-12-31')
+  .first()
+  .clip(AOI_G);
+  
+var y2018 = ndwiCollection.filterDate('2018-01-01','2018-12-31')
+  .first()
+  .clip(AOI_G);
+  
+var y2019 = ndwiCollection.filterDate('2019-01-01','2019-12-31')
+  .first()
+  .clip(AOI_G);
+  
+var y2020 = ndwiCollection.filterDate('2020-01-01','2020-12-31')
+  .first()
+  .clip(AOI_G);
+  
+print(y2014, '2014 Composite Image');
+print(y2015, '2015 Composite Image');
+print(y2016, '2016 Composite Image');
+print(y2017, '2017 Composite Image');
+print(y2018, '2018 Composite Image');
+print(y2019, '2019 Composite Image');
+print(y2020, '2020 Composite Image');
+
+var ndwiParams = {min: 0, max: 1, palette: ['white', 'blue']};
+
+Map.addLayer(y2014, ndwiParams, '2014 NDWI', 0);
+Map.centerObject(AOI_G,12);
+Map.addLayer(y2015, ndwiParams, '2015 NDWI', 0);
+Map.centerObject(AOI_G,12);
+Map.addLayer(y2016, ndwiParams, '2016 NDWI', 0);
+Map.centerObject(AOI_G,12);
+Map.addLayer(y2017, ndwiParams, '2017 NDWI', 0);
+Map.centerObject(AOI_G,12);
+Map.addLayer(y2018, ndwiParams, '2018 NDWI', 0);
+Map.centerObject(AOI_G,12);
+Map.addLayer(y2019, ndwiParams, '2019 NDWI', 0);
+Map.centerObject(AOI_G,12);
+Map.addLayer(y2020, ndwiParams, '2020 NDWI', 0);
+Map.centerObject(AOI_G,12);
+
+// Export map to Drive.
+var y2014section = ndwiCollection.filterDate('2014-01-01','2014-12-31')
+  .first()
+  .clip(AOI_G);
+
+var y2015section = ndwiCollection.filterDate('2015-01-01','2015-12-31')
+  .first()
+  .clip(AOI_G);
+
+var y2016section = ndwiCollection.filterDate('2016-01-01','2016-12-31')
+  .first()
+  .clip(AOI_G);
+
+var y2017section = ndwiCollection.filterDate('2017-01-01','2017-12-31')
+  .first()
+  .clip(AOI_G);
+
+var y2018section = ndwiCollection.filterDate('2018-01-01','2018-12-31')
+  .first()
+  .clip(AOI_G);
+
+var y2019section = ndwiCollection.filterDate('2019-01-01','2019-12-31')
+  .first()
+  .clip(AOI_G);
+
+var y2020section = ndwiCollection.filterDate('2020-01-01','2020-12-31')
+  .first()
+  .clip(AOI_G);
+
+Export.image.toDrive({
+  image: y2014section,
+  description: '2014_NDWI',
+  scale: 30,
+  maxPixels: 1000000000,
+});
+
+Export.image.toDrive({
+  image: y2015section,
+  description: '2015_NDWI',
+  scale: 30,
+  maxPixels: 1000000000,
+});
+
+Export.image.toDrive({
+  image: y2016section,
+  description: '2016_NDWI',
+  scale: 30,
+  maxPixels: 1000000000,
+});
+
+Export.image.toDrive({
+  image: y2017section,
+  description: '2017_NDWI',
+  scale: 30,
+  maxPixels: 1000000000,
+});
+
+Export.image.toDrive({
+  image: y2018section,
+  description: '2018_NDWI',
+  scale: 30,
+  maxPixels: 1000000000,
+});
+
+Export.image.toDrive({
+  image: y2019section,
+  description: '2019_NDWI',
+  scale: 30,
+  maxPixels: 1000000000,
+});
+
+Export.image.toDrive({
+  image: y2020section,
+  description: '2020_NDWI',
+  scale: 30,
+  maxPixels: 1000000000,
+});
+
+// Create a line chart to display NDWI time series for a selected point.
+// Display chart in the console.
+var chart = ui.Chart.image.series({
+  imageCollection: ndwiCollection.select('NDWI'),
+  region: AOI_G, //adding new region of interest and changing here might help looking for any specific region
+  scale: 30
+}).setOptions({title: 'NDWI Over Time'});
+
+print(chart);
+
+// Creating a Timeseries GIF of NDWI maps.
+var text = require('users/gena/packages:text');
+
+var yearNames = ee.List([ '2014', '2015', '2016','2017',
+                          '2018','2019','2020']);
+var ndwiWithYear = ndwiCollection.map(function(feat){
+  return feat.set('year', yearNames.getString(
+                      ee.Number.parse(feat.getString('system:index'))));
+});
+
+print(ndwiWithYear, 'year');
+
+var gifParams = {
+  'region': AOI_G,
+  'dimensions': 800,
+  'framesPerSecond': 1,
+  'format': 'gif'
+};
+
+var annotations = [{
+  position: 'bottom',
+  offset: '50%',
+  margin: '40%',
+  property: 'year',
+  scale: 60000
+  }];
+
+var timeSeriesgif = ndwiWithYear.map(function(image) {
+  return text.annotateImage(image, ndwiParams, AOI_G, annotations);
+});
+
+print(timeSeriesgif.getVideoThumbURL(gifParams));
+
+print(ui.Thumbnail(timeSeriesgif, gifParams));
+
+// Simple image differencing between 2014 and 2020.
+var SimpleImageDiff = y2014.subtract(y2020);
+
+var diffParams = {min: -1, max: 1, palette: ['green', 'yellow', 'red']};//red means decrease and green means increase
+Map.addLayer(SimpleImageDiff, diffParams, '2014/2020 Image Difference');
+Map.centerObject(AOI_G,12);
+
+var yMean = ndwiCollection.mean();
+var AvgImageDiff = yMean.subtract(y2020);
+
+Map.addLayer(AvgImageDiff, diffParams, '2020 Difference from Average');
+Map.centerObject(AOI_G,12);
+
+// Standard Anomalies (Z-Score). Calculate Standard Deviation across the NDWI collection.
+// Z-Score = (Year-Mean)/Standard Deviation
+var stdImg = ndwiCollection.reduce(ee.Reducer.stdDev());
+var Anomaly2020 = y2020.subtract(yMean).divide(stdImg);
+var Anomaly2018 = y2018.subtract(yMean).divide(stdImg);
+var Anomaly2016 = y2016.subtract(yMean).divide(stdImg);
+var Anomaly2014 = y2014.subtract(yMean).divide(stdImg);
+
+var anomParams = {min: -3, max:3, palette: ['red', 'yellow', 'green']};
+Map.addLayer(Anomaly2020, anomParams, '2020 Anomaly');
+Map.centerObject(AOI_G,12);
+Map.addLayer(Anomaly2018, anomParams, '2018 Anomaly');
+Map.centerObject(AOI_G,12);
+Map.addLayer(Anomaly2016, anomParams, '2016 Anomaly');
+Map.centerObject(AOI_G,12);
+Map.addLayer(Anomaly2014, anomParams, '2014 Anomaly');
+Map.centerObject(AOI_G,12);
