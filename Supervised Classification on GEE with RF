@@ -1,0 +1,179 @@
+/////////////////////////////////////////////////////////////////////////////////////
+//Supervised Land Cover Classification using Random Forest//
+/////////////////////////////////////////////////////////////////////////////////////
+
+////******Part 1: Adding imagery, filtering to area and date range, masking out clouds, and making a composite.******
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//Insert Landsat Image Collection and filter by area
+var image = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2')
+  .filterBounds(AOI_G);
+  
+print ("Germany", image);
+
+//Function to cloud mask from the pixel_qa band of Landsat 8 SR data. Bits 3 and 4 are cloud shadow and cloud, respectively.
+function maskL8sr(image) {
+  var cloudShadowBitMask = 1 << 3;
+  var cloudsBitMask = 1 << 4;
+
+  var qa = image.select('QA_PIXEL');
+
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+      .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000)
+      .select("SR_B[0-9]*")
+      .copyProperties(image, ["system:time_start"]);
+}
+
+//Filter imagery for 2019 and 2020 summer date ranges. 
+//Create joint filter and apply it to Image Collection
+var sum20 = ee.Filter.date('2020-06-01','2020-09-30');
+var sum19 = ee.Filter.date('2019-06-01','2019-09-30');
+
+var SumFilter = ee.Filter.or(sum20, sum19);
+
+var allsum = image.filter(SumFilter);
+
+//Make a Composite: Apply the cloud mask function, use the median reducer, 
+//and clip the composite to our area of interest
+var composite = allsum
+              .map(maskL8sr)
+              .median()
+              .clip(AOI_G);
+              
+
+//Display the Composite
+Map.addLayer(composite, {bands: ['SR_B4','SR_B3','SR_B2']},'True Image',0);
+Map.addLayer(composite, {bands: ['SR_B7','SR_B6','SR_B4']},'False Color (Urban)',0);
+Map.addLayer(composite, {bands: ['SR_B6','SR_B5','SR_B4']},'NDVI',0);
+Map.addLayer(composite, {bands: ['SR_B5','SR_B4','SR_B3']},'Color Infrared',0);
+
+//Center the displyed image
+Map.centerObject(AOI_G,12.5);
+
+//Merge land cover classifications into one feature class
+var newfc = Water.merge(Urban).merge(Forest).merge(Cropland).merge(Grassland);
+print (newfc);
+
+//Specify the bands to use in the prediction.
+var bands = ['SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7'];
+
+//Make training data by 'overlaying' the points on the image
+var points = composite.select(bands).sampleRegions({
+  collection: newfc, 
+  properties: ['Class'], 
+  scale: 30
+}).randomColumn();
+
+//Randomly split the samples to set some aside for testing the model's accuracy
+//using the "random" column. Roughly 80% for training, 20% for testing
+var split = 0.8;
+var training = points.filter(ee.Filter.lt('random', split));
+var testing = points.filter(ee.Filter.gte('random', split));
+
+//Print these variables to see how much training and testing data you are using
+print('Samples n =', points.aggregate_count('.all'));
+print('Training n =', training.aggregate_count('.all'));
+print('Testing n =', testing.aggregate_count('.all'));
+
+//Run the RF model using 300 trees and 5 randomly selected predictors per split ("(300,5)")
+//Train using bands and land cover property and pull the land cover property from classes
+var classifier = ee.Classifier.smileRandomForest(300,5).train({ 
+features: training,
+classProperty: 'Class',
+inputProperties: bands
+});
+
+//Test the accuracy of the model
+////////////////////////////////////////
+
+//Print Confusion Matrix and Overall Accuracy
+var confusionMatrix = classifier.confusionMatrix();
+print('Confusion matrix: ', confusionMatrix);
+print('Training Overall Accuracy: ', confusionMatrix.accuracy());
+var kappa = confusionMatrix.kappa();
+print('Training Kappa', kappa);
+
+var validation = testing.classify(classifier);
+var testAccuracy = validation.errorMatrix('Class', 'classification');
+print('Validation Error Matrix RF: ', testAccuracy);
+print('Validation Overall Accuracy RF: ', testAccuracy.accuracy());
+var kappa1 = testAccuracy.kappa();
+print('Validation Kappa', kappa1);
+
+//Apply the trained classifier to the image
+var classified = composite.select(bands).classify(classifier);
+print (classified.getInfo());
+
+//Set position of panel
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+
+//Create legend title
+var legendTitle = ui.Label({
+  value: 'Classification Legend',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '18px',
+    margin: '0 0 4px 0',
+    padding: '0'
+    }
+});
+
+//Add the title to the panel
+legend.add(legendTitle);
+
+//Create and style 1 row of the legend.
+var makeRow = function(color, name) {
+ 
+      var colorBox = ui.Label({
+        style: {
+          backgroundColor: '#' + color,
+          padding: '8px',
+          margin: '0 0 4px 0'
+        }
+      });
+      
+      var description = ui.Label({
+        value: name,
+        style: {margin: '0 0 4px 6px'}
+      });
+ 
+      return ui.Panel({
+        widgets: [colorBox, description],
+        layout: ui.Panel.Layout.Flow('horizontal')
+      });
+};
+
+//Identify palette with the legend colors
+var palette =['6086ff', 'ff0000', '275f00', 'ccff15', 'ffd186'];
+
+//Identify names within the legend
+var names = ['Water','Urban','Forest','Cropland','Grassland'];
+
+//Add color and names
+for (var i = 0; i < 5; i++) {
+  legend.add(makeRow(palette[i], names[i]));
+  } 
+  
+Map.add(legend);
+
+//Create palette for the final land cover map classifications
+var urbanPalette = 
+'<RasterSymbolizer>' +
+' <ColorMap  type="intervals">' +
+    '<ColorMapEntry color="#6086ff" quantity="0" label="Water"/>' +
+    '<ColorMapEntry color="#ff0000" quantity="1" label="Urban"/>' +
+    '<ColorMapEntry color="#275f00" quantity="2" label="Forest"/>' +
+    '<ColorMapEntry color="#ccff15" quantity="3" label="Cropland"/>' +
+    '<ColorMapEntry color="#ffd186" quantity="4" label="Grassland"/>' +
+  '</ColorMap>' +
+'</RasterSymbolizer>';
+
+//Add final map to the display
+Map.addLayer(classified.sldStyle(urbanPalette), {}, "Land Classification");
